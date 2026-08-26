@@ -49,7 +49,7 @@ placeholders. It contains a password, so `chmod 600` it.
   <dict>
     <key>NOTES_MCP_TRANSPORT</key><string>http</string>
     <key>NOTES_MCP_HOST</key><string>127.0.0.1</string>
-    <key>NOTES_MCP_PORT</key><string>18793</string>
+    <key>NOTES_MCP_PORT</key><string>18792</string>
     <key>NOTES_MCP_AUTH</key><string>password</string>
     <key>NOTES_MCP_PASSWORD</key><string>REPLACE-WITH-A-LONG-RANDOM-VALUE</string>
     <key>NOTES_MCP_BASE_URL</key><string>https://notes.example.com</string>
@@ -70,7 +70,7 @@ placeholders. It contains a password, so `chmod 600` it.
 ```bash
 chmod 600 ~/Library/LaunchAgents/com.example.notes-mcp.plist
 launchctl load ~/Library/LaunchAgents/com.example.notes-mcp.plist
-curl -s localhost:18793/health
+curl -s localhost:18792/health
 ```
 
 Bind to `127.0.0.1` and reach it through a tunnel or reverse proxy.
@@ -102,6 +102,12 @@ binary, not the venv symlink:
 ```bash
 python3 -c "import os; print(os.path.realpath('.venv/bin/python'))"
 ```
+
+If other uv-managed servers already run on the host, check before granting:
+`uv` reuses one interpreter across every project on the same Python version, so
+`readlink -f .venv/bin/python` may already point at a binary that has Full Disk
+Access. If it does, there is nothing to grant. The same sharing is why an
+interpreter upgrade breaks *every* such server at once.
 
 Clicking Allow on the popup is often not enough. Interpreters installed by `uv`
 and similar tools are ad-hoc signed with an empty identifier, and macOS binds
@@ -159,7 +165,7 @@ dead-man's-switch service such as healthchecks.io. Configure it in
 `~/.notes-mcp/check.env`:
 
 ```bash
-HEALTH_URL=http://127.0.0.1:18793/health
+HEALTH_URL=http://127.0.0.1:18792/health
 PING_URL=https://hc-ping.com/your-uuid-here
 EXPECTED_PYTHON=/Users/USERNAME/.local/share/uv/python/cpython-3.12.13-.../bin/python3.12
 VENV_PYTHON=/Users/USERNAME/path/to/notes-mcp/.venv/bin/python
@@ -222,7 +228,7 @@ editable install pointing at the old location, and the service fails with
 
 ```bash
 launchctl list | grep notes-mcp      # pid, last exit code
-curl -s localhost:18793/health       # liveness, counts, interpreter path
+curl -s localhost:18792/health       # liveness, counts, interpreter path
 tail -f ~/.notes-mcp/server.log
 ```
 
