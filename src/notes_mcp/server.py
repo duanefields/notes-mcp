@@ -727,9 +727,32 @@ async def delete_folder(folder_id: str, delete_notes_inside: bool = False) -> To
 # ----------------------------------------------------------------------
 
 
+def _tilde(path: str) -> str:
+    """Replace the home directory with ``~``.
+
+    ``/health`` is a custom route, and custom routes are not behind the auth
+    provider -- verified against a deployed sibling server, where the endpoint
+    answered 200 to an unauthenticated request from the open internet while
+    ``/mcp`` did not. So everything in this payload is public to anyone who
+    knows the hostname.
+
+    The interpreter's absolute path is reported because a uv upgrade moving it
+    is what silently voids Full Disk Access, and that path begins with the
+    operator's home directory -- publishing it hands out their account name for
+    nothing. The version-stamped part is the half that carries the warning, and
+    it survives here. Operators should also keep ``/health`` off the public
+    hostname entirely; the monitor reaches it on localhost.
+    """
+    home = os.path.expanduser("~")
+    return f"~{path[len(home):]}" if home != "/" and path.startswith(home) else path
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request):
     """Liveness, plus the two things that actually break this deployment.
+
+    Unauthenticated and public. Do not add anything here that would not be
+    safe on a billboard -- see ``_tilde``.
 
     `python` is reported because Full Disk Access is granted against the
     interpreter's resolved path, and a patch upgrade silently moves it and
@@ -741,7 +764,7 @@ async def health(request):
     """
     payload = {
         "status": "ok",
-        "python": os.path.realpath(sys.executable),
+        "python": _tilde(os.path.realpath(sys.executable)),
         "python_version": platform.python_version(),
         # Reported, but does not make the server unhealthy: reads work whether
         # or not Notes is up. It is the monitor's job to decide that a host

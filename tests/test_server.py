@@ -367,3 +367,34 @@ async def test_a_timeout_explains_the_consent_dialog(script):
     script.error = applescript.ScriptTimeout("Notes did not respond within 30s.")
     result = await server.update_note(notestore.PLAIN_NOTE, "Body")
     assert "did not respond" in data(result)["error"]
+
+
+# ----------------------------------------------------------------------
+# /health is public
+# ----------------------------------------------------------------------
+
+
+def test_health_does_not_publish_the_operators_username():
+    """Custom routes are not behind the auth provider -- verified against a
+    deployed sibling, which answered 200 to an unauthenticated request from the
+    open internet. So the interpreter path must not start with /Users/<name>."""
+    import os
+
+    home = os.path.expanduser("~")
+    assert server._tilde(f"{home}/.local/share/uv/python/x/bin/python3.12") == (
+        "~/.local/share/uv/python/x/bin/python3.12"
+    )
+
+
+def test_tilde_leaves_a_path_outside_the_home_directory_alone():
+    assert server._tilde("/usr/bin/python3") == "/usr/bin/python3"
+
+
+async def test_health_payload_carries_no_home_path(db_env):
+    from starlette.requests import Request
+
+    scope = {"type": "http", "method": "GET", "path": "/health", "headers": []}
+    response = await server.health(Request(scope))
+    body = response.body.decode()
+    assert "/Users/" not in body
+    assert '"status":"ok"' in body.replace(" ", "")

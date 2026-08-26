@@ -77,6 +77,30 @@ Bind to `127.0.0.1` and reach it through a tunnel or reverse proxy.
 
 Pick a port that does not collide with the other MCP servers on the same host.
 
+## Keep `/health` off the public hostname
+
+`/health` is a custom route, and custom routes do **not** sit behind the auth
+provider. Verified against a deployed server: the endpoint answered `200` to an
+unauthenticated request from the open internet while `/mcp` did not.
+
+Nothing secret is in the payload — the interpreter path is reported with the
+home directory replaced by `~` for exactly this reason — but it still confirms
+the service exists, names its Python version, and counts the archive. The
+monitor reaches it on `127.0.0.1`, so it never needs to be public. Block it at
+the edge. With Cloudflare Tunnel, put a `404` rule ahead of the real one:
+
+```yaml
+  - hostname: notes.example.com
+    path: ^/health
+    service: http_status:404
+  - hostname: notes.example.com
+    service: http://localhost:18792
+```
+
+Order matters: the first matching rule wins, so the `/health` rule must come
+first. Do not put Cloudflare Access on the hostname — it intercepts the OAuth
+callbacks and breaks the connector handshake.
+
 ## The privacy prompt that hangs the service
 
 **This is the one that will catch you.** Reading
