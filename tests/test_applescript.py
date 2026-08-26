@@ -192,3 +192,110 @@ def test_notes_not_running(monkeypatch):
         lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, b"", b""),
     )
     assert applescript.notes_is_running() is False
+
+
+# ----------------------------------------------------------------------
+# What /health is told about the last write
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def forget_the_last_write():
+    """The record lives in the module, so without this one test's write shows
+    up in the next one's assertions."""
+    applescript.reset_last_write()
+    yield
+    applescript.reset_last_write()
+
+
+def test_nothing_is_reported_before_the_first_write():
+    """A freshly restarted server has not been asked to write. That is not a
+    failure, and a monitor must not read it as one."""
+    assert applescript.last_write() == {
+        "at": None,
+        "ok": None,
+        "action": None,
+        "error": None,
+    }
+
+
+def test_a_successful_write_is_recorded(spawned):
+    applescript.create_note("folder-id", "<div>x</div>")
+    record = applescript.last_write()
+    assert record["ok"] is True
+    assert record["action"] == "create_note"
+    assert record["error"] is None
+    assert record["at"] is not None
+
+
+@pytest.mark.parametrize(
+    "call,action",
+    [
+        (lambda: applescript.set_body("n", "b"), "set_body"),
+        (lambda: applescript.move_note("n", "f"), "move_note"),
+        (lambda: applescript.delete_note("n"), "delete_note"),
+        (lambda: applescript.create_folder("x"), "create_folder"),
+        (lambda: applescript.create_folder("x", parent_id="p"), "create_folder"),
+        (lambda: applescript.delete_folder("f"), "delete_folder"),
+    ],
+)
+def test_every_write_names_itself(spawned, call, action):
+    """Recording happens inside run(), so a write tool added later cannot
+    forget to do it -- but the action label still has to be passed."""
+    try:
+        call()
+    except applescript.ScriptError:
+        pass
+    assert applescript.last_write()["action"] == action
+
+
+def test_a_timeout_is_recorded_as_a_failed_write(monkeypatch):
+    def fake_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 30)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(applescript.ScriptTimeout):
+        applescript.create_note("folder-id", "<div>x</div>")
+    record = applescript.last_write()
+    assert record["ok"] is False
+    assert record["error"] == "ScriptTimeout"
+
+
+def test_a_refusal_is_recorded_as_a_failed_write(monkeypatch):
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="Notes: -1728")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(applescript.ScriptError):
+        applescript.delete_note("note-id")
+    assert applescript.last_write() == {
+        "at": applescript.last_write()["at"],
+        "ok": False,
+        "action": "delete_note",
+        "error": "ScriptError",
+    }
+
+
+def test_the_published_failure_is_a_class_name_never_a_message(monkeypatch):
+    """/health is unauthenticated and healthcheck.sh forwards it off the host.
+    osascript's stderr quotes the arguments it was given, which for a write is
+    the note's entire body."""
+    secret = "Bank PIN is 1234 and the spare key is under the mat"
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr=secret)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(applescript.ScriptError, match="1234"):
+        applescript.set_body("note-id", f"<div>{secret}</div>")
+
+    # The exception the caller sees may carry it; what /health publishes must not.
+    published = applescript.last_write()
+    assert published["error"] == "ScriptError"
+    assert secret not in repr(published)
+
+
+def test_a_read_only_run_records_nothing(spawned):
+    """Only writes are recorded; run() without an action is not a write."""
+    applescript.run("on run\nreturn 1\nend run")
+    assert applescript.last_write()["action"] is None

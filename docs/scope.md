@@ -206,6 +206,27 @@ changed. Filtering on the flag alone leaves trashed notes in every listing.
 up rather than hardcoding 12 and 15. A stale constant would make every query
 return nothing at all, with no error to explain it.
 
+## Knowing whether writes still work
+
+Reads and writes fail independently here, and only one of them is visible.
+Every read comes off the database, so a host whose Apple Events grant has been
+revoked — from System Settings, or by the interpreter moving — serves every
+read correctly and fails every write. Nothing else about it looks wrong.
+
+So `/health` reports the outcome of the last write: when, which action, whether
+it worked, and the exception's class name if it did not. `applescript.run`
+records it, rather than each tool, so a write tool added later cannot forget.
+
+Only `ok: false` is a fault. A null means the process has not been asked to
+write since it started, which is ordinary after a restart and must not alert.
+
+The class name is deliberate and the message is deliberately absent. `/health`
+is unauthenticated and `healthcheck.sh` forwards what it finds to a ping
+service off the host; a `ScriptError` carries osascript's stderr, and osascript
+quotes the arguments it was given — which for a write is the whole note. This
+is the same reasoning things-mcp applies to a Things URL, which embeds the auth
+token, and dav-mcp to a `DavError`, which names the account principal.
+
 ## Deliberately not built
 
 - **Attachment contents.** `get_note` reports that an image is there, not what

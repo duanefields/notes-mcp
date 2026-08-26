@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,53 @@ DEFAULT_TIMEOUT_SECONDS = 30
 _OBJECT_ID = re.compile(r"^x-coredata://[0-9A-Fa-f-]+/IC(?:Note|Folder)/p\d+$")
 
 
+# The outcome of the most recent write, for ``/health`` to report.
+#
+# This is the only way a revoked Apple Events grant becomes visible without
+# somebody attempting a write and reading the reply. Reads come off the
+# database and keep working, so a host that can no longer change anything looks
+# entirely healthy from every other angle.
+_last_write: dict = {"at": None, "ok": None, "action": None, "error": None}
+
+
+def last_write() -> dict:
+    """A copy of the most recent write's outcome."""
+    return dict(_last_write)
+
+
+def reset_last_write() -> None:
+    """Forget the last write. For tests, which must not leak state into each other."""
+    _last_write.update({"at": None, "ok": None, "action": None, "error": None})
+
+
+def _publishable_failure(exc: Exception) -> str:
+    """Describe a failure in terms safe to serve from ``/health``.
+
+    Only the exception's class name. ``/health`` is unauthenticated and
+    ``healthcheck.sh`` forwards its contents off the host to a ping service, so
+    the message must not travel: a ``ScriptError`` carries osascript's stderr,
+    and osascript quotes the arguments it was given -- which for a write is the
+    note's entire body.
+
+    The class name is what an operator actually needs. ``ScriptTimeout`` means
+    the Apple Events consent dialog is unanswered; ``ScriptError`` means Notes
+    refused. Neither leaks anything. The full exception still reaches the log,
+    which is local and privileged.
+    """
+    return type(exc).__name__
+
+
+def _record(action: str, ok: bool, exc: Exception | None = None) -> None:
+    _last_write.update(
+        {
+            "at": time.time(),
+            "ok": ok,
+            "action": action,
+            "error": _publishable_failure(exc) if exc is not None else None,
+        }
+    )
+
+
 class ScriptError(Exception):
     """Notes refused the operation, or could not be reached."""
 
@@ -44,8 +92,17 @@ def object_id(store_uuid: str, entity: str, pk: int) -> str:
     return f"x-coredata://{store_uuid}/{entity}/p{pk}"
 
 
-def run(script: str, *args: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> str:
+def run(
+    script: str,
+    *args: str,
+    action: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
     """Run an AppleScript with arguments and return its trimmed output.
+
+    ``action`` names the write for ``/health`` to report. Recording happens
+    here rather than in each caller so that a write tool added later cannot
+    forget to do it -- every one of them ends up in this function.
 
     The timeout is not defensive padding. Controlling Notes needs Apple Events
     permission, and the first attempt raises a consent dialog that **blocks
@@ -63,17 +120,28 @@ def run(script: str, *args: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> st
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ScriptTimeout(
+        failure = ScriptTimeout(
             f"Notes did not respond within {timeout:.0f}s. This is usually the "
             "macOS consent dialog asking to control Notes, which blocks until "
             "someone answers it at the machine. Grant it there once, then retry."
-        ) from exc
+        )
+        if action:
+            _record(action, False, failure)
+        raise failure from exc
     except OSError as exc:
-        raise ScriptError(f"Could not run osascript: {exc}") from exc
+        failure = ScriptError(f"Could not run osascript: {exc}")
+        if action:
+            _record(action, False, failure)
+        raise failure from exc
 
     if result.returncode != 0:
         detail = (result.stderr or "").strip() or f"exit status {result.returncode}"
-        raise ScriptError(f"Notes refused the operation: {detail}")
+        failure = ScriptError(f"Notes refused the operation: {detail}")
+        if action:
+            _record(action, False, failure)
+        raise failure
+    if action:
+        _record(action, True)
     return result.stdout.strip()
 
 
@@ -104,7 +172,7 @@ def create_note(folder_id: str, body_html: str) -> str:
     so the two disagree from then on -- confirmed on a real note. The first
     line is the only title there is.
     """
-    return _returned_id(run(_CREATE_NOTE, folder_id, body_html))
+    return _returned_id(run(_CREATE_NOTE, folder_id, body_html, action="create_note"))
 
 
 _SET_BODY = """
@@ -126,7 +194,7 @@ def set_body(note_id: str, body_html: str) -> None:
     to change part of a note. Callers must check ``db.rewrite_hazards`` first --
     attachments and checklists do not survive this.
     """
-    run(_SET_BODY, note_id, body_html)
+    run(_SET_BODY, note_id, body_html, action="set_body")
 
 
 _MOVE_NOTE = """
@@ -140,7 +208,7 @@ end run
 
 
 def move_note(note_id: str, folder_id: str) -> None:
-    run(_MOVE_NOTE, note_id, folder_id)
+    run(_MOVE_NOTE, note_id, folder_id, action="move_note")
 
 
 _DELETE_NOTE = """
@@ -160,7 +228,7 @@ def delete_note(note_id: str) -> None:
     from the app. There is no scriptable way to empty the trash, which is a
     good thing here.
     """
-    run(_DELETE_NOTE, note_id)
+    run(_DELETE_NOTE, note_id, action="delete_note")
 
 
 _CREATE_FOLDER = """
@@ -188,8 +256,8 @@ end run
 def create_folder(name: str, parent_id: str | None = None) -> str:
     """Create a folder, optionally inside another, and return its id."""
     if parent_id:
-        return _returned_id(run(_CREATE_SUBFOLDER, parent_id, name))
-    return _returned_id(run(_CREATE_FOLDER, name))
+        return _returned_id(run(_CREATE_SUBFOLDER, parent_id, name, action="create_folder"))
+    return _returned_id(run(_CREATE_FOLDER, name, action="create_folder"))
 
 
 # Deleting a folder needs a filter clause, not a direct object.
@@ -221,7 +289,7 @@ def delete_folder(folder_id: str) -> None:
     and make the operator agree -- this function cannot tell a folder that was
     deleted from one that never matched.
     """
-    run(_DELETE_FOLDER, folder_id)
+    run(_DELETE_FOLDER, folder_id, action="delete_folder")
 
 
 def notes_is_running() -> bool:

@@ -15,6 +15,7 @@ them.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -748,6 +749,22 @@ def _tilde(path: str) -> str:
     return f"~{path[len(home):]}" if home != "/" and path.startswith(home) else path
 
 
+def _last_write_report() -> dict:
+    """The last write's outcome, with its timestamp as ISO 8601 UTC.
+
+    ``at`` is None until this process has attempted a write. That is not a
+    fault -- a freshly restarted server has not been asked to do anything yet --
+    so the monitor must not read a null as a failure.
+    """
+    record = applescript.last_write()
+    at = record["at"]
+    if at is not None:
+        record["at"] = datetime.datetime.fromtimestamp(
+            at, datetime.timezone.utc
+        ).isoformat()
+    return record
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request):
     """Liveness, plus the two things that actually break this deployment.
@@ -772,6 +789,15 @@ async def health(request):
         # or not Notes is up. It is the monitor's job to decide that a host
         # which cannot write is a problem worth waking someone for.
         "notes_running": applescript.notes_is_running(),
+        # The outcome of the last write, which is the only thing here that can
+        # reveal a revoked Apple Events grant. Every read keeps working when
+        # that happens, so without this the server looks perfectly healthy
+        # while nothing it is asked to change actually changes.
+        #
+        # `error` is an exception class name and never a message; see
+        # `applescript._publishable_failure` for why that matters on an
+        # unauthenticated endpoint.
+        "last_write": _last_write_report(),
     }
     try:
         conn = db.connect()

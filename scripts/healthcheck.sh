@@ -61,13 +61,16 @@ else
   status=$(jget status);  database=$(jget database)
   notes=$(jget notes); folders=$(jget folders)
   python=$(jget python_version); notes_app=$(jget notes_running)
+  write_ok=$(jget last_write.ok); write_action=$(jget last_write.action)
+  write_error=$(jget last_write.error)
 
   if [[ -z "$status" ]]; then
     problems+=("could not parse the health response from $HEALTH_URL")
   fi
 
   report+="status=${status:-?} database=${database:-?} notes_app=${notes_app:-?}"
-  report+=" notes=${notes:-?} folders=${folders:-?} python=${python:-?}"
+  report+=" notes=${notes:-?} folders=${folders:-?} last_write=${write_ok:-none}"
+  report+=" python=${python:-?}"
 
   [[ -n "$status" && "$status" != "ok" ]] && problems+=("health status is '$status'")
   [[ -n "$database" && "$database" != "ok" ]] && problems+=("database is $database")
@@ -80,6 +83,18 @@ else
   # path is configured, not that the notes are gone. Either way the server is
   # serving nothing and nobody would otherwise notice.
   [[ "$notes" == "0" ]] && problems+=("the database reports 0 notes; wrong path, or the store was rebuilt")
+
+  # The failure with no local symptom: the Apple Events grant for Notes can be
+  # revoked from System Settings, or voided by the interpreter moving, without
+  # anything else on this host changing. Reads come off the database and keep
+  # working, so every other field here stays green while nothing the server is
+  # asked to change actually changes.
+  #
+  # Only "false" is a problem. An empty value means this process has not been
+  # asked to write yet, which is the normal state after a restart.
+  if [[ "$write_ok" == "false" || "$write_ok" == "False" ]]; then
+    problems+=("last write (${write_action:-unknown}) failed: ${write_error:-no detail}; the Apple Events grant for Notes may have been revoked")
+  fi
 fi
 
 # --- has the interpreter moved out from under its privacy approval? ----------

@@ -218,6 +218,19 @@ It reports failure on four things:
   wrong, but every write would fail.
 - **The interpreter moved.** The early warning for the privacy-approval problem
   above. Re-grant Full Disk Access and update `EXPECTED_PYTHON` together.
+- **The last write failed.** This is the failure with no other symptom. The
+  Apple Events grant for Notes can be revoked from System Settings, or voided
+  by the interpreter moving, without anything else on the host changing — every
+  read comes off the database and keeps working, so the service looks entirely
+  healthy while nothing it is asked to change actually changes. `/health`
+  reports `last_write`, and only `ok: false` is a problem: a null means this
+  process has not been asked to write since it started, which is the normal
+  state after a restart.
+
+  The `error` there is an exception class name, never a message, because this
+  endpoint is public and the monitor forwards its contents off the host —
+  osascript's stderr quotes the arguments it was given, which for a write is
+  the note's entire body.
 
 There is deliberately **no staleness check**, unlike the sibling iMessage
 server. An archive that stops receiving messages is evidence of a broken sync;
