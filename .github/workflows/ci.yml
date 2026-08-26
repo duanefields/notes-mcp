@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes an in-flight run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # The server only ever runs on macOS -- it shells to osascript and reads
+    # Apple's NoteStore.sqlite -- so the tests run there too. The suite itself
+    # is portable (it fakes the osascript boundary and builds a synthetic
+    # database), but matching production is what makes a green check mean
+    # something.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      # --locked fails if uv.lock has drifted from pyproject.toml, which is a
+      # real thing to catch rather than paper over by resolving afresh.
+      - name: Install
+        run: uv sync --extra test --locked
+
+      - name: Test
+        run: uv run pytest
+
+  lint:
+    # Bugs, not style -- see [tool.ruff.lint] in pyproject.toml. Pinned,
+    # because ruff adds rules in minor releases and an unpinned linter turns
+    # main red on a morning nobody touched anything.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uvx ruff@0.16.4 check src tests
+
+  scan:
+    # Pure grep, so it runs on the cheapest, fastest runner. Kept a separate
+    # job from the tests: when this one fails the answer is never "retry".
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Scan tracked files for personal data
+        run: ./scripts/scan-secrets.sh
