@@ -77,29 +77,34 @@ Bind to `127.0.0.1` and reach it through a tunnel or reverse proxy.
 
 Pick a port that does not collide with the other MCP servers on the same host.
 
-## Keep `/health` off the public hostname
+## `/health` is public, so keep it boring
 
 `/health` is a custom route, and custom routes do **not** sit behind the auth
 provider. Verified against a deployed server: the endpoint answered `200` to an
 unauthenticated request from the open internet while `/mcp` did not.
 
-Nothing secret is in the payload — the interpreter path is reported with the
-home directory replaced by `~` for exactly this reason — but it still confirms
-the service exists, names its Python version, and counts the archive. The
-monitor reaches it on `127.0.0.1`, so it never needs to be public. Block it at
-the edge. With Cloudflare Tunnel, put a `404` rule ahead of the real one:
+That is deliberate and worth keeping. An external uptime monitor has to be able
+to poll it without credentials, and a monitor running on the host cannot report
+that the host is gone.
+
+The consequence is a rule about the payload, not about the routing: **nothing
+goes in it that you would not publish.** The interpreter path is reported
+because a uv upgrade moving it is what silently voids Full Disk Access — but it
+is reported with the home directory replaced by `~`, since the absolute form
+begins with the operator's account name and publishing that buys nothing. The
+version-stamped part, which is the half that carries the warning, survives.
+
+If you would rather it not be reachable at all, a `404` rule ahead of the
+service rule will do it — but then only the on-host cron check can see it:
 
 ```yaml
   - hostname: notes.example.com
     path: ^/health
     service: http_status:404
-  - hostname: notes.example.com
-    service: http://localhost:18792
 ```
 
-Order matters: the first matching rule wins, so the `/health` rule must come
-first. Do not put Cloudflare Access on the hostname — it intercepts the OAuth
-callbacks and breaks the connector handshake.
+Do not put Cloudflare Access on the hostname either way — it intercepts the
+OAuth callbacks and breaks the connector handshake.
 
 ## The privacy prompt that hangs the service
 

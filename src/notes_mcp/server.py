@@ -733,15 +733,16 @@ def _tilde(path: str) -> str:
     ``/health`` is a custom route, and custom routes are not behind the auth
     provider -- verified against a deployed sibling server, where the endpoint
     answered 200 to an unauthenticated request from the open internet while
-    ``/mcp`` did not. So everything in this payload is public to anyone who
-    knows the hostname.
+    ``/mcp`` did not. That is intended: an external uptime monitor has to reach
+    it without credentials, and a monitor on the host cannot report the host
+    being gone.
 
-    The interpreter's absolute path is reported because a uv upgrade moving it
-    is what silently voids Full Disk Access, and that path begins with the
-    operator's home directory -- publishing it hands out their account name for
-    nothing. The version-stamped part is the half that carries the warning, and
-    it survives here. Operators should also keep ``/health`` off the public
-    hostname entirely; the monitor reaches it on localhost.
+    So the payload is the thing that has to be safe, and the interpreter's
+    absolute path was not. It is reported because a uv upgrade moving it is
+    what silently voids Full Disk Access -- a genuinely useful field -- but the
+    absolute form begins with the operator's home directory, which publishes
+    their account name for no benefit. The version-stamped part carries the
+    whole warning and survives.
     """
     home = os.path.expanduser("~")
     return f"~{path[len(home):]}" if home != "/" and path.startswith(home) else path
@@ -751,8 +752,9 @@ def _tilde(path: str) -> str:
 async def health(request):
     """Liveness, plus the two things that actually break this deployment.
 
-    Unauthenticated and public. Do not add anything here that would not be
-    safe on a billboard -- see ``_tilde``.
+    Unauthenticated and public by design, so an uptime monitor can poll it.
+    Do not add anything here that would not be safe on a billboard -- see
+    ``_tilde``.
 
     `python` is reported because Full Disk Access is granted against the
     interpreter's resolved path, and a patch upgrade silently moves it and
