@@ -54,11 +54,10 @@ def reset_last_write() -> None:
 def _publishable_failure(exc: Exception) -> str:
     """Describe a failure in terms safe to serve from ``/health``.
 
-    Only the exception's class name. ``/health`` is unauthenticated and
-    ``healthcheck.sh`` forwards its contents off the host to a ping service, so
-    the message must not travel: a ``ScriptError`` carries osascript's stderr,
-    and osascript quotes the arguments it was given -- which for a write is the
-    note's entire body.
+    Only the exception's class name. ``/health`` is unauthenticated and answers
+    anyone who asks, so the message must not travel: a ``ScriptError`` carries
+    osascript's stderr, and osascript quotes the arguments it was given --
+    which for a write is the note's entire body.
 
     The class name is what an operator actually needs. ``ScriptTimeout`` means
     the Apple Events consent dialog is unanswered; ``ScriptError`` means Notes

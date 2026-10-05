@@ -277,7 +277,7 @@ def test_a_refusal_is_recorded_as_a_failed_write(monkeypatch):
 
 
 def test_the_published_failure_is_a_class_name_never_a_message(monkeypatch):
-    """/health is unauthenticated and healthcheck.sh forwards it off the host.
+    """/health is unauthenticated and answers anyone who asks.
     osascript's stderr quotes the arguments it was given, which for a write is
     the note's entire body."""
     secret = "Bank PIN is 1234 and the spare key is under the mat"

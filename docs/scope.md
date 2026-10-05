@@ -221,8 +221,7 @@ Only `ok: false` is a fault. A null means the process has not been asked to
 write since it started, which is ordinary after a restart and must not alert.
 
 The class name is deliberate and the message is deliberately absent. `/health`
-is unauthenticated and `healthcheck.sh` forwards what it finds to a ping
-service off the host; a `ScriptError` carries osascript's stderr, and osascript
+is unauthenticated and answers anyone who asks; a `ScriptError` carries osascript's stderr, and osascript
 quotes the arguments it was given — which for a write is the whole note. This
 is the same reasoning things-mcp applies to a Things URL, which embeds the auth
 token, and dav-mcp to a `DavError`, which names the account principal.

@@ -157,9 +157,9 @@ silently invalidating it, and the service goes back to hanging on startup with
 no error anywhere. A `.python-version` holding only `3.12` permits exactly that
 upgrade.
 
-`GET /health` reports the resolved interpreter path so the change is visible
-before it bites. `scripts/healthcheck.sh` compares it against `EXPECTED_PYTHON`
-and fails when it moves.
+`GET /health` reports the resolved interpreter path, and returns 503 the moment
+it differs from the one the process started under, so the change is visible
+before the next restart makes it bite.
 
 ## Notes.app must be running
 
@@ -189,59 +189,48 @@ with an explanation rather than hanging the client forever.
 
 ## Monitoring
 
-`scripts/healthcheck.sh` checks a running server and reports to a
-dead-man's-switch service such as healthchecks.io. Configure it in
-`~/.notes-mcp/check.env`:
+`/health` makes the call itself, so any HTTP uptime monitor can watch it with
+no script on the host: point it at the public URL, e.g.
+`https://notes.example.com/health`, and treat anything but a 2xx as down.
+Uptime Kuma's plain **HTTP(s)** monitor type is enough.
 
-```bash
-HEALTH_URL=http://127.0.0.1:18792/health
-PING_URL=https://hc-ping.com/your-uuid-here
-EXPECTED_PYTHON=/Users/USERNAME/.local/share/uv/python/cpython-3.12.13-.../bin/python3.12
-VENV_PYTHON=/Users/USERNAME/path/to/notes-mcp/.venv/bin/python
-```
+It answers 200 with `"status": "ok"`, or 503 with `status` naming every problem
+it found, comma-separated:
 
-Expand `$REPO` and `~` yourself; cron does neither.
-
-```cron
-*/10 * * * * $REPO/scripts/healthcheck.sh >> ~/.notes-mcp/check.log 2>&1
-```
-
-`chmod 600` the config: the ping URL is a capability, not just an address.
-
-It reports failure on four things:
-
-- **No response.** Either down, or hung on a permission prompt. A timeout is
-  meaningful here, since the documented failure mode is a hang rather than a
-  crash.
-- **The database is unreachable.** `/health` returns 503 and says so.
-- **Notes.app is not running.** Reads keep working, so nothing else looks
+- **`database unreachable`**. Full Disk Access is missing or the store has
+  moved.
+- **`database has no notes`**. The store was rebuilt or the wrong path is
+  configured; either way the server is serving nothing.
+- **`Notes.app is not running`**. Reads keep working, so nothing else looks
   wrong, but every write would fail.
-- **The interpreter moved.** The early warning for the privacy-approval problem
-  above. Re-grant Full Disk Access and update `EXPECTED_PYTHON` together.
-- **The last write failed.** This is the failure with no other symptom. The
+- **`last write failed`**. This is the failure with no other symptom. The
   Apple Events grant for Notes can be revoked from System Settings, or voided
   by the interpreter moving, without anything else on the host changing — every
   read comes off the database and keeps working, so the service looks entirely
-  healthy while nothing it is asked to change actually changes. `/health`
-  reports `last_write`, and only `ok: false` is a problem: a null means this
-  process has not been asked to write since it started, which is the normal
-  state after a restart.
+  healthy while nothing it is asked to change actually changes. Cleared by the
+  next successful write or a restart.
 
-  The `error` there is an exception class name, never a message, because this
-  endpoint is public and the monitor forwards its contents off the host —
-  osascript's stderr quotes the arguments it was given, which for a write is
-  the note's entire body.
+  `last_write.error` is an exception class name, never a message, because this
+  endpoint is public — osascript's stderr quotes the arguments it was given,
+  which for a write is the note's entire body.
+- **`interpreter moved, re-grant Full Disk Access`**. The early warning for the
+  privacy-approval problem above, raised while the old process is still up to
+  report it.
 
-There is deliberately **no staleness check**, unlike the sibling iMessage
-server. An archive that stops receiving messages is evidence of a broken sync;
-notes are different. Nobody writes a note on a schedule, so "nothing has
-changed in a week" is an ordinary week rather than a fault, and a threshold
-that fired on it would be switched off within a month. The note and folder
-counts are logged on every run instead — those are what a rebuilt or
-half-synced store would actually move, and a sudden 0 is reported as a failure.
+A monitor alert only says 503; `curl` the endpoint for the reason. No response
+at all means the server is down, or hung on a permission prompt — the
+documented failure mode is a hang rather than a crash, so give the monitor a
+timeout.
 
-An outward ping is what makes the whole machine being gone detectable. A
-monitor running on the same host cannot report its own host's death.
+There is deliberately **no staleness check**. An archive of messages that stops
+receiving is evidence of a broken sync; notes are different. Nobody writes a
+note on a schedule, so "nothing has changed in a week" is an ordinary week
+rather than a fault, and a threshold that fired on it would be switched off
+within a month. The note and folder counts are reported instead — those are
+what a rebuilt or half-synced store would actually move, and a 0 is a failure.
+
+A monitor running on the same host cannot report its own host's death. Cover
+that separately, with something off the machine.
 
 ## Deploying by pushing
 

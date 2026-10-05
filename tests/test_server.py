@@ -390,7 +390,15 @@ def test_tilde_leaves_a_path_outside_the_home_directory_alone():
     assert server._tilde("/usr/bin/python3") == "/usr/bin/python3"
 
 
-async def test_health_payload_carries_no_home_path(db_env):
+async def get_health():
+    from starlette.requests import Request
+
+    scope = {"type": "http", "method": "GET", "path": "/health", "headers": []}
+    response = await server.health(Request(scope))
+    return response.status_code, json.loads(response.body)
+
+
+async def test_health_payload_carries_no_home_path(db_env, notes_running):
     from starlette.requests import Request
 
     scope = {"type": "http", "method": "GET", "path": "/health", "headers": []}
@@ -398,3 +406,78 @@ async def test_health_payload_carries_no_home_path(db_env):
     body = response.body.decode()
     assert "/Users/" not in body
     assert '"status":"ok"' in body.replace(" ", "")
+
+
+# ----------------------------------------------------------------------
+# /health makes the verdict: the monitor only reads the status code
+# ----------------------------------------------------------------------
+
+
+async def test_health_is_ok_when_nothing_is_wrong(db_env, notes_running):
+    code, body = await get_health()
+    assert code == 200
+    assert body["status"] == "ok"
+
+
+async def test_health_names_the_problem_when_the_database_is_gone(
+    monkeypatch, tmp_path, notes_running
+):
+    monkeypatch.setenv("NOTES_MCP_DB_PATH", str(tmp_path / "absent.sqlite"))
+    code, body = await get_health()
+    assert code == 503
+    assert body["status"] == "database unreachable"
+
+
+async def test_health_fails_when_the_store_is_empty(db_env, notes_running, monkeypatch):
+    """A rebuilt store or a wrong path serves nothing, and nothing else says so."""
+    from notes_mcp import db
+
+    monkeypatch.setattr(db, "count_notes", lambda conn: 0)
+    code, body = await get_health()
+    assert code == 503
+    assert body["status"] == "database has no notes"
+
+
+async def test_health_fails_when_notes_is_not_running(db_env, monkeypatch):
+    """Reads keep working without Notes, so nothing else looks wrong -- but
+    every write would fail."""
+    from notes_mcp import applescript
+
+    monkeypatch.setattr(applescript, "notes_is_running", lambda: False)
+    code, body = await get_health()
+    assert code == 503
+    assert body["status"] == "Notes.app is not running"
+
+
+async def test_health_fails_after_a_failed_write(db_env, notes_running, monkeypatch):
+    """A revoked Apple Events grant leaves every read working while every write
+    is dropped. The last write is the only sign."""
+    from notes_mcp import applescript
+
+    monkeypatch.setattr(
+        applescript, "last_write",
+        lambda: {"at": None, "ok": False, "action": "update_note", "error": "ScriptError"},
+    )
+    code, body = await get_health()
+    assert code == 503
+    assert body["status"] == "last write failed"
+
+
+async def test_health_fails_when_the_interpreter_moves(db_env, notes_running, monkeypatch):
+    """A uv upgrade repoints the venv's interpreter while this process keeps
+    running on the old one. Flagged now, because after the next restart the
+    service hangs and cannot say anything."""
+    monkeypatch.setattr(server, "_STARTUP_PYTHON", "/elsewhere/bin/python3.12")
+    code, body = await get_health()
+    assert code == 503
+    assert body["status"] == "interpreter moved, re-grant Full Disk Access"
+
+
+async def test_health_lists_every_problem(monkeypatch, tmp_path):
+    from notes_mcp import applescript
+
+    monkeypatch.setenv("NOTES_MCP_DB_PATH", str(tmp_path / "absent.sqlite"))
+    monkeypatch.setattr(applescript, "notes_is_running", lambda: False)
+    code, body = await get_health()
+    assert code == 503
+    assert body["status"] == "database unreachable, Notes.app is not running"
